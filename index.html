@@ -73,6 +73,9 @@ label.f{display:block;font-size:11px;color:var(--ink-faint);margin-bottom:5px;fo
 .chev{transition:transform .2s;color:var(--ink-faint);display:inline-block}
 details[open]>summary .chev{transform:rotate(90deg)}
 .sector[open]>summary{border-bottom:1px solid var(--line)}
+.objrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 14px 0;font-size:13px;font-weight:700;color:var(--primary-dark)}
+.objrow input{width:96px;text-align:center;font-weight:700}
+.objrow span{font-weight:400;color:var(--ink-faint);font-size:11.5px}
 .copiar{margin:10px 14px 0;background:var(--primary-soft);color:var(--primary-dark);font-size:12.5px;padding:7px 12px;border-radius:8px}
 .est{padding:10px 14px 12px;border-bottom:1px dashed var(--line)}
 .est:last-child{border-bottom:0}
@@ -221,7 +224,6 @@ td.c-warn{background:var(--warning-soft);color:#8a5a15;font-weight:700}
     <p class="sub">Control de Conductividad Eléctrica (CE) en soluciones y sondas de profundidad · Riego · HFE Berries Olmos</p>
   </div>
   <div class="hdr-meta">
-    <div><span>Fuente de datos</span><b id="mFuente">Google Sheets</b></div>
     <div><span>Actualizado</span><b id="mAct">–</b></div>
     <div><span>Última fecha con datos</span><b id="mUlt">–</b></div>
     <div><span>Registros analizados</span><b id="mReg">–</b></div>
@@ -424,7 +426,7 @@ const ESTACIONES = [
   ['O2E2','MADEIRA 6,7',true,[15]], ['O2E2','MANILA 6,7',true,[15]],
   ['O3E1','O3 EQ1 P1 1',true,[15]], ['O3E1','O3 EQ1 P2 3',true,[15]], ['O3E1','O3 EQ1 P3 4',true,[15,20,40]],
   ['O3E1','O3 EQ1 P4 4',true,[15,20,40]], ['O3E1','O3 EQ1 P5 2',true,[15,20,40]],
-  ['O3E2','O3 EQ2 P3 11',true,[15]], ['O3E2','O3 EQ2 P3 2 T1',false,[15]], ['O3E2','O3 EQ2 P3 5 T1',true,[15]], ['O3E2','O3 EQ2 P3 5 T2',false,[15]]
+  ['O3E2','O3 EQ2 P3 11',true,[15]], ['O3E2','O3 EQ2 P3 2 T1',true,[15]], ['O3E2','O3 EQ2 P3 5 T1',true,[15]], ['O3E2','O3 EQ2 P3 5 T2',true,[15]]
 ].map(([sector, estacion, sfr, prof]) => ({ sector, estacion, sfr, prof }));
 const SECTORES = ['O1E1','O1E2','O2E1','O2E2','O3E1','O3E2'];
 const PROFS = [10,15,20,40];
@@ -484,7 +486,26 @@ function normalizarFecha(v){
 /* Estado según desviación % absoluta vs CE objetivo */
 function estadoDe(dev){ if(dev==null||isNaN(dev)) return null; const a=Math.abs(dev); return a<=PARAM.normalMax ? 'NORMAL' : a<=PARAM.alertaMax ? 'ALERTA' : 'CRITICO'; }
 const colorEstado = e => e==='NORMAL'?COLOR.ok : e==='ALERTA'?COLOR.alerta : e==='CRITICO'?COLOR.critico : COLOR.nd;
-const devSFR = (sector, ce) => { const o = PARAM.objetivos[sector]; return (ce!=null && o) ? (ce-o)/o*100 : null; };
+const devSFR = (sector, ce, obj) => { const o = obj ?? PARAM.objetivos[sector]; return (ce!=null && o) ? (ce-o)/o*100 : null; };
+/* CE objetivo editable por registro: por defecto el último usado en ese sector (o el de la hoja Parametros) */
+let OBJ = {}, OBJ_TOCADO = {};
+const objDe = s => OBJ[s] ?? PARAM.objetivos[s] ?? null;
+function objetivoSugerido(s){
+  for(const e of (DATA.envios||[])){ const f = e.filas.find(x => x.sector===s && x.obj!=null); if(f) return f.obj; }
+  return PARAM.objetivos[s] ?? null;
+}
+function objsDeFilas(filas){
+  const o = {};
+  filas.forEach(f => { if(o[f.sector]==null && f.obj!=null) o[f.sector] = f.obj; });
+  [...new Set(filas.map(f=>f.sector))].forEach(s => { if(o[s]==null) o[s] = PARAM.objetivos[s] ?? null; });
+  return o;
+}
+function sugerirObjetivos(){ SECTORES.forEach(s => { if(!OBJ_TOCADO[s]) OBJ[s] = objetivoSugerido(s); }); refrescarObjetivos(); }
+function refrescarObjetivos(){
+  $$('#sectores input[data-obj]').forEach(i => { const v = objDe(i.dataset.obj); if(document.activeElement!==i) i.value = v==null?'':v; });
+  $$('#sectores [data-objtxt]').forEach(t => { const v = objDe(t.dataset.objtxt); t.textContent = 'obj ' + (v==null?'–':f2(v)); });
+  $$('#sectores input[data-k="sfrCE"]').forEach(validarInput);
+}
 const lblProf = p => p==='sfr' ? 'SFR' : `${p} cm`;
 
 /* =====================================================================
@@ -508,13 +529,14 @@ let FORM = ESTACIONES.slice();        // estaciones que muestra el formulario (e
 const claveEst = e => `${e.sector}|${e.estacion}`;
 
 function renderFormulario(){
-  $('#leyenda').innerHTML = `CE objetivo por sector (hoja Parametros). CE SFR fuera de ±${PARAM.normalMax}% se marca en naranja y fuera de ±${PARAM.alertaMax}% en rojo.`;
+  $('#leyenda').innerHTML = `El CE objetivo de cada sector se puede cambiar en cada registro. CE SFR fuera de ±${PARAM.normalMax}% del objetivo se marca en naranja y fuera de ±${PARAM.alertaMax}% en rojo.`;
   const porSector = SECTORES.concat([...new Set(FORM.map(e=>e.sector))].filter(s=>!SECTORES.includes(s)));
   $('#sectores').innerHTML = porSector.filter(s => FORM.some(e=>e.sector===s)).map((s,si) => {
     const ests = FORM.map((e,i)=>({...e, i})).filter(e=>e.sector===s);
     const nSfr = ests.filter(e=>e.sfr).length;
     return `<details class="sector" ${si===0?'open':''}>
-      <summary><span class="chev">▶</span><span class="nombre">${s}</span><span class="obj">obj ${PARAM.objetivos[s]!=null?f2(PARAM.objetivos[s]):'–'}</span><span class="cnt" data-cnt="${s}">0/0</span></summary>
+      <summary><span class="chev">▶</span><span class="nombre">${s}</span><span class="obj" data-objtxt="${s}">obj ${objDe(s)!=null?f2(objDe(s)):'–'}</span><span class="cnt" data-cnt="${s}">0/0</span></summary>
+      <div class="objrow"><label for="obj-${s}">CE objetivo ${s}</label><input id="obj-${s}" data-obj="${s}" inputmode="decimal" value="${objDe(s)??''}"><span>dS/m · editable en cada registro (por defecto, el último usado)</span></div>
       ${nSfr>1?`<button class="copiar" onclick="copiarSFR('${s}')">↧ Copiar SFR de la 1.ª estación a todo ${s}</button>`:''}
       ${ests.map(e => `<div class="est">
         <div class="est-t">${esc(e.estacion)} ${e.extra?'<span class="tag extra">del registro</span>':''}</div>
@@ -527,7 +549,10 @@ function renderFormulario(){
     </details>`;
   }).join('');
 }
-$('#sectores').addEventListener('input', e => { if(e.target.dataset.k){ validarInput(e.target); guardarBorrador(); actualizarConteo(); } });
+$('#sectores').addEventListener('input', e => {
+  if(e.target.dataset.k){ validarInput(e.target); guardarBorrador(); actualizarConteo(); }
+  if(e.target.dataset.obj){ const s = e.target.dataset.obj; OBJ[s] = num(e.target.value); OBJ_TOCADO[s] = true; refrescarObjetivos(); guardarBorrador(); }
+});
 ['fecha','responsable','obs'].forEach(id => $('#'+id).addEventListener('input', guardarBorrador));
 $('#fecha').addEventListener('input', mostrarSemana);
 $('#responsable').addEventListener('change', () => store.set(LS_RESP, $('#responsable').value.trim()));
@@ -542,7 +567,7 @@ function validarInput(inp){
   if(inp.value.trim()==='') return;
   if(v==null || v<0){ inp.classList.add('bad'); return; }
   if(k.endsWith('PH')){ inp.classList.add(v<CONFIG.PH_RANGO[0]||v>CONFIG.PH_RANGO[1] ? 'bad' : 'okv'); return; }
-  if(k==='sfrCE'){ const est = estadoDe(devSFR(FORM[+inp.dataset.i].sector, v)); inp.classList.add(est==='CRITICO'?'bad':est==='ALERTA'?'warn':'okv'); return; }
+  if(k==='sfrCE'){ const sec = FORM[+inp.dataset.i].sector; const est = estadoDe(devSFR(sec, v, objDe(sec))); inp.classList.add(est==='CRITICO'?'bad':est==='ALERTA'?'warn':'okv'); return; }
   inp.classList.add('okv');
 }
 function copiarSFR(s){
@@ -574,13 +599,16 @@ function guardarBorrador(){
   if(typeof EDIT!=='undefined' && EDIT) return;
   const vals = {};
   $$('#sectores input[data-k]').forEach(i => { if(i.value) vals[claveEst(FORM[+i.dataset.i])+'|'+i.dataset.k] = i.value; });
-  store.set(LS_DRAFT, { fecha:$('#fecha').value, responsable:$('#responsable').value, obs:$('#obs').value, vals });
+  const objs = {}; Object.keys(OBJ_TOCADO).forEach(s => objs[s] = OBJ[s]);
+  store.set(LS_DRAFT, { fecha:$('#fecha').value, responsable:$('#responsable').value, obs:$('#obs').value, vals, objs });
 }
 function cargarBorrador(){
   const b = store.get(LS_DRAFT, null);
   $('#fecha').value = (b && b.fecha) || hoyISO();
   $('#responsable').value = (b && b.responsable) || store.get(LS_RESP, '');
   $('#obs').value = (b && b.obs) || '';
+  if(b && b.objs) Object.keys(b.objs).forEach(s => { OBJ[s] = b.objs[s]; OBJ_TOCADO[s] = true; });
+  refrescarObjetivos();
   if(b && b.vals) $$('#sectores input[data-k]').forEach(i => { const v=b.vals[claveEst(FORM[+i.dataset.i])+'|'+i.dataset.k]; if(v!=null){ i.value=v; validarInput(i); } });
   mostrarSemana(); actualizarConteo();
 }
@@ -590,13 +618,14 @@ function vaciarFormulario(){
 }
 
 /* ---------- Resumen por sector (para revisión, WhatsApp y PDF) ---------- */
-function resumenSectores(ests){
+function resumenSectores(ests, objetivos){
+  objetivos = objetivos || {};
   return SECTORES.concat([...new Set(ests.map(e=>e.sector))].filter(s=>!SECTORES.includes(s))).map(s => {
     const es = ests.filter(e=>e.sector===s); if(!es.length) return null;
     const sfr = prom(es.map(e=>e.sfrCE)), son = prom(es.flatMap(e=>PROFS.map(p=>e[`s${p}CE`])));
     const d15 = prom(es.map(e=>e.s15CE)), d40 = prom(es.map(e=>e.s40CE));
-    const dev = devSFR(s, sfr);
-    return { sector:s, obj:PARAM.objetivos[s] ?? null, sfr, son, phSfr: prom(es.map(e=>e.sfrPH)), dev, estado: estadoDe(dev),
+    const obj = objetivos[s] ?? PARAM.objetivos[s] ?? null, dev = devSFR(s, sfr, obj);
+    return { sector:s, obj, sfr, son, phSfr: prom(es.map(e=>e.sfrPH)), dev, estado: estadoDe(dev),
              gap: (d15!=null && d40!=null) ? Math.abs(d15-d40) : null, n: es.filter(tieneDato).length, total: es.length };
   }).filter(Boolean);
 }
@@ -611,10 +640,11 @@ function alertasDeResumen(res){
 let registroActual = null;
 function construirRegistro(){
   return { id: uid(), fecha: $('#fecha').value, responsable: $('#responsable').value.trim(), observaciones: $('#obs').value.trim(),
-           enviadoEn: new Date().toISOString(), dispositivo: navigator.userAgent.slice(0,120), estaciones: leerDatos() };
+           enviadoEn: new Date().toISOString(), dispositivo: navigator.userAgent.slice(0,120), estaciones: leerDatos(),
+           objetivos: Object.fromEntries([...new Set(FORM.map(e=>e.sector))].map(s => [s, objDe(s)])) };
 }
 function textoResumen(reg){
-  const L = [], inf = infoFecha(reg.fecha), con = reg.estaciones.filter(tieneDato), res = resumenSectores(reg.estaciones).filter(r => r.n > 0);
+  const L = [], inf = infoFecha(reg.fecha), con = reg.estaciones.filter(tieneDato), res = resumenSectores(reg.estaciones, reg.objetivos).filter(r => r.n > 0);
   const ico = e => e==='NORMAL'?'✅':e==='ALERTA'?'⚠️':e==='CRITICO'?'⛔':'▫️';
   L.push('*SEGUIMIENTO DE FERTIRRIEGO – RIEGO*');
   L.push(`📅 Fecha: ${fmtFecha(reg.fecha)} · Sem ${inf.sem} · ${inf.temp}`);
@@ -651,7 +681,7 @@ function abrirRevision(modo){
   const h = reg.estaciones.filter(tieneDato).length;
   if(!h) avisos.push(['err','No hay ninguna estación con datos.']);
   else if(h < reg.estaciones.length) avisos.push(['warn',`${reg.estaciones.length-h} estación(es) sin datos. Se guardarán vacías.`]);
-  const al = alertasDeResumen(resumenSectores(reg.estaciones));
+  const al = alertasDeResumen(resumenSectores(reg.estaciones, reg.objetivos));
   if(al.length) avisos.push(['warn',`${al.length} alerta(s) de fertirriego.`]);
   $('#revTitulo').textContent = EDIT ? 'Revisar cambios' : 'Revisar registro';
   $('#revAlertas').innerHTML = avisos.map(([t,m])=>`<div class="alert ${t}">${m}</div>`).join('');
@@ -710,10 +740,11 @@ async function enviar(){
     cola: `<div class="alert warn">No se pudo conectar con Sheets (${esc(res.msg||'')}). Quedó guardado en este equipo y se subirá automáticamente cuando haya conexión.</div>`
   }[res.estado];
   terminarEdicion(false);
+  if(DATA.raw) { procesarDatos(DATA.raw); prepararFiltros(); }
+  OBJ = {}; OBJ_TOCADO = {}; sugerirObjetivos();          // por defecto: el último objetivo usado
   if(eraEdicion) { FORM = ESTACIONES.slice(); renderFormulario(); }
   vaciarFormulario();
   if(eraEdicion) cargarBorrador(); else store.del(LS_DRAFT);
-  if(DATA.raw) { procesarDatos(DATA.raw); prepararFiltros(); }
   actualizarPendientes();
   registroActual = reg;
   if(MODO==='whatsapp') abrirWhatsApp(reg);
@@ -750,6 +781,7 @@ function editarEnvio(e){
   });
   FORM = f;
   EDIT = { id:e.id, codigo:e.codigo||'' };
+  OBJ = objsDeFilas(e.filas); OBJ_TOCADO = Object.fromEntries(Object.keys(OBJ).map(s=>[s,true]));
   renderFormulario();
   $('#fecha').value = e.fecha; $('#responsable').value = e.responsable; $('#obs').value = e.observaciones || '';
   e.filas.forEach(r => {
@@ -765,7 +797,7 @@ function terminarEdicion(recargar){
   EDIT = null;
   $('#editBanner').classList.remove('show');
   $('#btnCancelar').textContent = 'Cancelar'; $('#btnRegistrar').textContent = 'Registrar'; $('#btnRegWa').textContent = 'Registrar y enviar WhatsApp';
-  if(recargar){ FORM = ESTACIONES.slice(); renderFormulario(); vaciarFormulario(); cargarBorrador(); }
+  if(recargar){ OBJ = {}; OBJ_TOCADO = {}; FORM = ESTACIONES.slice(); sugerirObjetivos(); renderFormulario(); vaciarFormulario(); cargarBorrador(); }
 }
 async function eliminarEnvio(e){
   if(!confirm(`¿Eliminar el registro ${e.codigo||''} del ${fmtFecha(e.fecha)} (${e.responsable})?\nSe borrarán sus ${e.filas.length} filas en Sheets. Esta acción no se puede deshacer.`)) return;
@@ -817,7 +849,7 @@ function aplicarOpRaw(raw, op){
   op.estaciones.forEach(e => {
     let k = raw.est.findIndex(x => x[0]===e.sector && x[1]===e.estacion);
     if(k < 0){ k = raw.est.length; raw.est.push([e.sector, e.estacion]); }
-    raw.registros.push([nuevo, k, ...KEYS.map(x => e[x]??null)]);
+    raw.registros.push([nuevo, k, ...KEYS.map(x => e[x]??null), (op.objetivos||{})[e.sector] ?? null]);
   });
 }
 function clonarRaw(r){ return { envios:r.envios.map(x=>[...x]), est:r.est.map(x=>[...x]), registros:r.registros.map(x=>[...x]) }; }
@@ -833,6 +865,7 @@ function procesarDatos(rawServidor){
     const env = envios[r[0]], est = raw.est[r[1]]; if(!env || !est || !env.fecha) return;
     const f = { id:env.id, fecha:env.fecha, sem:env.sem, key:env.key, temp:env.temp, anio:env.anio, sector:est[0], estacion:est[1], pend:env.pend };
     KEYS.forEach((k,j) => { const v = r[2+j]; f[k] = (v===''||v==null) ? null : Number(v); });
+    f.obj = (r[12]===''||r[12]==null) ? null : Number(r[12]);
     filas.push(f); env.filas.push(f);
   });
   DATA.filas = filas;
@@ -847,6 +880,7 @@ function aplicarRaw(raw, fuente, ts){
   DATA.cargado = true;
   $('#demoBanner').style.display = fuente==='demo' ? '' : 'none';
   prepararFiltros(); actualizarMeta();
+  if(!EDIT) sugerirObjetivos();
   const tab = document.querySelector('nav.tabs button.act').dataset.tab;
   if(tab==='historial') renderHistorial(); else if(tab==='dashboard') renderDashboard();
 }
@@ -880,7 +914,6 @@ function actualizarMeta(){
   const fuenteTxt = { demo:'Datos de demostración', sheets:'Sheets', cache:'Sin conexión: datos guardados', error:'No se pudo cargar' }[DATA.fuente] || '';
   const cuando = DATA.actualizado ? DATA.actualizado.toLocaleString('es-PE',{ timeZone:ZONA, dateStyle:'short', timeStyle:'short' }) : '–';
   $('#dataMeta').textContent = `${fuenteTxt} · ${cuando}`;
-  $('#mFuente').textContent = DATA.fuente==='demo' ? 'Demostración' : 'Google Sheets';
   $('#mAct').textContent = cuando;
   $('#mUlt').textContent = DATA.envios.length ? fmtFecha(DATA.envios[0].fecha) : '–';
   $('#mReg').textContent = DATA.filas.reduce((s,f)=>s+KEYS.filter(k=>f[k]!=null).length,0).toLocaleString('es-PE');
@@ -964,7 +997,8 @@ function resumenSector(s, filas){
   const sfr = usarSFR() ? prom(fs.map(f=>f['sfr'+V])) : null;
   const dp = {}; PROFS.forEach(p => dp[p] = usarSonda() ? prom(fs.map(f=>f[`s${p}${V}`])) : null);
   const son = usarSonda() ? prom(fs.flatMap(f=>PROFS.map(p=>f[`s${p}${V}`]))) : null;
-  const obj = V==='CE' ? (PARAM.objetivos[s] ?? null) : null;
+  const conSfr = fs.filter(f=>f.sfrCE!=null);
+  const obj = V==='CE' ? prom((conSfr.length?conSfr:fs).map(f => f.obj ?? PARAM.objetivos[s] ?? null)) : null;
   const dev = (V==='CE' && sfr!=null && obj) ? (sfr-obj)/obj*100 : null;
   const n = fs.reduce((a,f)=>a+(usarSFR()&&f['sfr'+V]!=null?1:0)+(usarSonda()?PROFS.filter(p=>f[`s${p}${V}`]!=null).length:0),0);
   return { sector:s, sfr, son, obj, dev, estado: estadoDe(dev), dp, gap: (V==='CE' && dp[15]!=null && dp[40]!=null) ? Math.abs(dp[15]-dp[40]) : null, n };
@@ -1032,7 +1066,7 @@ function renderDashboard(){
   const cls = rs.estado ? 'state-'+rs.estado : '';
   const card = (l,v,ft,c='') => `<div class="kpi-card ${cls}"><div class="k-label">${l}</div><div class="k-value ${c}">${v}</div><div class="k-foot">${ft}</div></div>`;
   $('#kpiGrid').innerHTML = V==='CE'
-    ? card('CE objetivo', f2(rs.obj), 'Definido por el área de Riego (hoja Parametros)') + card('CE SFR', f2(rs.sfr), 'Promedio solución de fertirriego') +
+    ? card('CE objetivo', f2(rs.obj), 'Promedio de los objetivos registrados en el periodo') + card('CE SFR', f2(rs.sfr), 'Promedio solución de fertirriego') +
       card('CE promedio sondas', f2(rs.son), 'Promedio 10 / 15 / 20 / 40 cm') +
       card('Desviación vs. objetivo', pct(rs.dev), '(CE SFR − CE objetivo) / CE objetivo', rs.dev>0?'dev-up':'dev-down') +
       `<div class="kpi-card ${cls}"><div class="k-label">Estado</div><div class="k-value">${rs.estado?`<span class="pill ${rs.estado}"><span class="dot"></span>${rs.estado}</span>`:'N/D'}</div><div class="k-foot">Umbrales: ≤${PARAM.normalMax}% normal · ≤${PARAM.alertaMax}% alerta</div></div>`
@@ -1056,12 +1090,13 @@ function renderDashboard(){
   const ds = [];
   if(usarSonda()) PROFS.forEach(p => { const d = serie(`s${p}${V}`); if(d.some(v=>v!=null)) ds.push({ label:`Sonda ${p} cm`, data:d, borderColor:COLOR[p], backgroundColor:COLOR[p], borderWidth:2, pointRadius:xs.length>60?0:3, tension:.35, spanGaps:true }); });
   if(usarSFR()){ const d = serie('sfr'+V); if(d.some(v=>v!=null)) ds.push({ label:'SFR', data:d, borderColor:COLOR.sfr, backgroundColor:COLOR.sfr, borderWidth:2, pointRadius:xs.length>60?0:3, tension:.35, spanGaps:true }); }
-  const obj = PARAM.objetivos[foco];
-  if(V==='CE' && obj){
+  const obj = rs.obj;
+  const serObj = xs.map(x => { const v = prom(ff.filter(f=>claveX(f)===x).map(f => f.obj ?? PARAM.objetivos[foco] ?? null)); return v==null?null:+v.toFixed(3); });
+  if(V==='CE' && serObj.some(v=>v!=null)){
     const b = PARAM.bandaPct/100;
-    ds.push({ label:`Rango ±${PARAM.bandaPct}% (${f2(obj*(1-b))} – ${f2(obj*(1+b))})`, data:xs.map(()=>+(obj*(1+b)).toFixed(3)), borderWidth:0, pointRadius:0, backgroundColor:'rgba(120,130,125,.14)', fill:'+1' });
-    ds.push({ label:'_banda', data:xs.map(()=>+(obj*(1-b)).toFixed(3)), borderWidth:0, pointRadius:0, fill:false });
-    ds.push({ label:`CE objetivo (${f2(obj)})`, data:xs.map(()=>obj), borderColor:COLOR.obj, borderDash:[6,4], borderWidth:1.5, pointRadius:0 });
+    ds.push({ label:`Rango ±${PARAM.bandaPct}% del objetivo`, data:serObj.map(v=>v==null?null:+(v*(1+b)).toFixed(3)), borderWidth:0, pointRadius:0, backgroundColor:'rgba(120,130,125,.14)', fill:'+1', stepped:true, spanGaps:true });
+    ds.push({ label:'_banda', data:serObj.map(v=>v==null?null:+(v*(1-b)).toFixed(3)), borderWidth:0, pointRadius:0, fill:false, stepped:true, spanGaps:true });
+    ds.push({ label:'CE objetivo (por registro)', data:serObj, borderColor:COLOR.obj, borderDash:[6,4], borderWidth:1.5, pointRadius:0, stepped:true, spanGaps:true });
   }
   $('#tEvo').textContent = `Evolución de ${VL} en el tiempo`;
   $('#sEvo').textContent = `${foco}${$('#fEst').value?' · '+$('#fEst').value:''} · Sondas, SFR${V==='CE'?' y CE objetivo':''}${porSemana?' · agregado por semana':''}`;
@@ -1157,7 +1192,7 @@ function renderHistorial(){
   const paginas = Math.ceil(lista.length/H_POR_PAG); HPAG = Math.min(HPAG, paginas-1);
   const vis = lista.slice(HPAG*H_POR_PAG, HPAG*H_POR_PAG+H_POR_PAG);
   $('#hLista').innerHTML = vis.map(e => {
-    const res = resumenSectores(e.filas), al = alertasDeResumen(res).length, con = e.filas.filter(tieneDato).length;
+    const res = resumenSectores(e.filas, objsDeFilas(e.filas)), al = alertasDeResumen(res).length, con = e.filas.filter(tieneDato).length;
     const sfr = prom(e.filas.map(f=>f.sfrCE)), son = prom(e.filas.flatMap(f=>PROFS.map(p=>f[`s${p}CE`])));
     return `<details class="hitem" data-id="${esc(e.id)}">
       <summary><span class="fch">${fmtFecha(e.fecha)}</span>
@@ -1173,7 +1208,7 @@ function detalleHist(e){
   if(!e) return '';
   const sec = $('#hSector').value, fil = e.filas.filter(f=>!sec || f.sector===sec);
   const c = (f,k) => { const v=f[k]; if(v==null) return '<td class="n" style="color:#b0b7c3">–</td>';
-    if(k==='sfrCE'){ const est = estadoDe(devSFR(f.sector, v)); return `<td class="n ${est==='CRITICO'?'c-bad':est==='ALERTA'?'c-warn':''}">${f2(v)}</td>`; }
+    if(k==='sfrCE'){ const est = estadoDe(devSFR(f.sector, v, f.obj)); return `<td class="n ${est==='CRITICO'?'c-bad':est==='ALERTA'?'c-warn':''}">${f2(v)}</td>`; }
     return `<td class="n">${f2(v)}</td>`; };
   return `<div class="hacc">
       <button class="btn btn-sm" onclick="accionHist('${esc(e.id)}','editar')">✏️ Editar</button>
@@ -1185,7 +1220,7 @@ function detalleHist(e){
     <tbody>${fil.map(f => `<tr><td><b>${esc(f.sector)}</b></td><td>${esc(f.estacion)}</td>${KEYS.map(k=>c(f,k)).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 function regDesdeEnvio(e){
-  return { id:e.id, codigo:e.codigo, fecha:e.fecha, responsable:e.responsable, observaciones:e.observaciones,
+  return { id:e.id, codigo:e.codigo, fecha:e.fecha, responsable:e.responsable, observaciones:e.observaciones, objetivos: objsDeFilas(e.filas),
            estaciones: e.filas.map(f => { const o = { sector:f.sector, estacion:f.estacion }; KEYS.forEach(k=>o[k]=f[k]); return o; }) };
 }
 function accionHist(id, acc, btn){
@@ -1225,7 +1260,7 @@ function generarPDF(e){
   const W = 210, H = 297, M = 12, CW = W - 2*M;
   const C = { verde:[15,107,76], verde2:[10,74,52], suave:[220,239,228], txt:[22,36,27], muted:[124,138,128], borde:[223,230,224],
               err:[192,57,43], errBg:[248,226,223], warn:[138,90,21], warnBg:[250,237,215], ok:[30,142,90], okBg:[220,241,230], zebra:[247,250,247] };
-  const regs = regDesdeEnvio(e).estaciones, res = resumenSectores(regs), con = regs.filter(tieneDato).length;
+  const rd = regDesdeEnvio(e), regs = rd.estaciones, res = resumenSectores(regs, rd.objetivos), con = regs.filter(tieneDato).length;
   const usar10 = regs.some(r => r.s10CE!=null || r.s10PH!=null);
   const profs = usar10 ? [10,15,20,40] : [15,20,40];
 
@@ -1274,7 +1309,7 @@ function generarPDF(e){
   for(let i=2;i<head[0].length;i++) cs[i] = { cellWidth:anchoVal };
   doc.autoTable({ ...base, startY:y, head, body, columnStyles:cs,
     styles:{ ...base.styles, minCellHeight:alto, fontSize: alto<4.2 ? 7.2 : 8 },
-    didParseCell: d => { if(d.section!=='body' || d.column.index!==2) return; const r = regs[d.row.index]; const est = estadoDe(devSFR(r.sector, r.sfrCE));
+    didParseCell: d => { if(d.section!=='body' || d.column.index!==2) return; const r = regs[d.row.index]; const est = estadoDe(devSFR(r.sector, r.sfrCE, rd.objetivos[r.sector]));
       if(est==='CRITICO'){ d.cell.styles.textColor=C.err; d.cell.styles.fillColor=C.errBg; d.cell.styles.fontStyle='bold'; }
       else if(est==='ALERTA'){ d.cell.styles.textColor=C.warn; d.cell.styles.fillColor=C.warnBg; d.cell.styles.fontStyle='bold'; } } });
 
@@ -1319,6 +1354,7 @@ function datosDemo(){
       const sfr = e.sfr ? +(obj*(0.8 + rnd()*0.35)).toFixed(2) : null;
       const row = [n, k, sfr, e.sfr ? +(6.2 + rnd()*0.8).toFixed(2) : null];
       PROFS.forEach(p => { const on = e.prof.includes(p); row.push(on ? +(obj*(0.75 + rnd()*0.5) + p/400).toFixed(2) : null, on ? +(3.6 + p/40 + rnd()*0.8).toFixed(2) : null); });
+      row.push(obj);
       registros.push(row);
     });
     n++;
