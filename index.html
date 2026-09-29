@@ -280,6 +280,7 @@ td.c-warn{background:var(--warning-soft);color:#8a5a15;font-weight:700}
       <button class="btn-ghost btn-sm" onclick="limpiarFiltros()">Restablecer filtros</button>
       <span class="meta ml-auto" id="dataMeta"></span>
       <button class="btn-sec btn-sm" onclick="cargarDatos(true)">Actualizar</button>
+      <button class="btn btn-sm" id="btnHtml" onclick="generarHTML(this)">⬇ Generar HTML</button>
     </div>
   </section>
 
@@ -302,7 +303,8 @@ td.c-warn{background:var(--warning-soft);color:#8a5a15;font-weight:700}
   <section class="panel">
     <div class="panel-head">
       <div class="panel-title"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l6-6 4 4 8-8"/></svg></span><h2 id="tEvo">Evolución de CE en el tiempo</h2></div>
-      <div class="panel-sub" id="sEvo"></div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="panel-sub" id="sEvo"></span>
+        <div class="chips solo-app" id="valChips" title="Mostrar los valores sobre los puntos"><button data-v="1">Valores</button><button data-v="0">Sin valores</button></div></div>
     </div>
     <div class="chart-box"><canvas id="chEvo"></canvas></div>
   </section>
@@ -337,9 +339,9 @@ td.c-warn{background:var(--warning-soft);color:#8a5a15;font-weight:700}
       <div class="panel-title"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></svg></span><h2>Registros combinados</h2></div>
       <div class="panel-sub" id="sTabla"></div>
     </div>
-    <div style="margin-bottom:10px"><input class="search" id="tBuscar" placeholder="Buscar en la tabla…"></div>
+    <div style="margin-bottom:10px" class="solo-app"><input class="search" id="tBuscar" placeholder="Buscar en la tabla…"></div>
     <div class="table-scroll" id="tablaBox"></div>
-    <div class="pager"><span id="pgInfo"></span><button id="pgAnt">◀ Anterior</button><button id="pgSig">Siguiente ▶</button></div>
+    <div class="pager solo-app"><span id="pgInfo"></span><button id="pgAnt">◀ Anterior</button><button id="pgSig">Siguiente ▶</button></div>
   </section>
   <div class="foot">HFE Berries · Filial Olmos · Área de Riego</div>
 </section>
@@ -444,6 +446,7 @@ const store = {
   set(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); return true; }catch(e){ return false; } },
   del(k){ try{ localStorage.removeItem(k); }catch(e){} }
 };
+let VER_VALORES = store.get('fert_ver_valores', !(window.matchMedia && matchMedia('(max-width:640px)').matches));   // valores sobre el gráfico de evolución
 const pad2 = n => String(n).padStart(2,'0');
 const ZONA = 'America/Lima';
 function partesLima(d = new Date()){
@@ -980,6 +983,9 @@ function prepararEstaciones(){
   if(id==='hTemp') opciones($('#hSem'), semanasDe($('#hTemp').value), 'Todas');
   HPAG = 0; renderHistorial();
 }));
+function marcarValChips(){ $$('#valChips button').forEach(x => x.classList.toggle('act', (x.dataset.v==='1')===VER_VALORES)); }
+marcarValChips();
+$$('#valChips button').forEach(b => b.addEventListener('click', () => { VER_VALORES = b.dataset.v==='1'; store.set('fert_ver_valores', VER_VALORES); marcarValChips(); renderDashboard(); }));
 $$('#varChips button').forEach(b => b.addEventListener('click', () => { VAR = b.dataset.v; $$('#varChips button').forEach(x=>x.classList.toggle('act', x===b)); renderDashboard(); }));
 function limpiarFiltros(){
   $('#fTemp').value = temporadas()[0] || ''; FILTRO_INI = false; ['fSem','fDesde','fHasta','fSector','fEst','fTipo'].forEach(id => $('#'+id).value='');
@@ -1027,6 +1033,36 @@ function dibujar(id, config){
   charts[id] = new Chart(cv, config);
 }
 /* Plugin: escribe el valor sobre cada barra */
+/* Plugin: escribe los valores sobre los puntos de las líneas, sin encimarse */
+const valoresLinea = {
+  id:'valores', afterDatasetsDraw(chart, args, opts){
+    if(!opts || !opts.on) return;
+    const { ctx, chartArea } = chart, ocupados = [];
+    const choca = b => ocupados.some(o => b.x < o.x+o.w && b.x+b.w > o.x && b.y < o.y+o.h && b.y+b.h > o.y);
+    ctx.save(); ctx.font = '600 10px ui-monospace, Menlo, monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+    // primero SFR y objetivo (más importantes), luego sondas
+    const orden = chart.data.datasets.map((d,i)=>i).filter(i => { const l = chart.data.datasets[i].label||''; return !l.startsWith('_') && !l.startsWith('Rango') && !chart.getDatasetMeta(i).hidden; })
+      .sort((a,b) => { const p = l => l==='SFR'?0 : l.startsWith('CE objetivo')?1 : 2; return p(chart.data.datasets[a].label) - p(chart.data.datasets[b].label); });
+    orden.forEach(i => {
+      const ds = chart.data.datasets[i], meta = chart.getDatasetMeta(i), esObj = (ds.label||'').startsWith('CE objetivo');
+      const paso = Math.max(1, Math.ceil(meta.data.length / (chartArea.width < 500 ? 12 : 45)));   // pocos rótulos si hay muchos puntos
+      meta.data.forEach((pt, j) => {
+        const v = ds.data[j]; if(v==null || isNaN(v)) return;
+        if(!esObj && j % paso !== 0 && j !== meta.data.length-1) return;
+        if(esObj && j>0 && ds.data[j-1]===v) return;                  // objetivo: solo cuando cambia
+        const t = Number(v).toFixed(2), w = ctx.measureText(t).width + 6, h = 12;
+        let caja = null;
+        const cx = Math.min(Math.max(pt.x, chartArea.left + w/2), chartArea.right - w/2);
+        for(const dy of [-10, 11, -21, 22]){ const b = { x:cx - w/2, y:pt.y + dy - h/2, w, h }; if(b.y > chartArea.top-12 && b.y+h < chartArea.bottom+2 && !choca(b)){ caja = b; break; } }
+        if(!caja) return;
+        ocupados.push(caja);
+        ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.lineWidth = 3; ctx.strokeText(t, cx, caja.y + h/2);
+        ctx.fillStyle = esObj ? '#2b2b2b' : (ds.borderColor || '#16241b'); ctx.fillText(t, cx, caja.y + h/2);
+      });
+    });
+    ctx.restore();
+  }
+};
 const etiquetasBarras = {
   id:'etiquetas', afterDatasetsDraw(chart, args, opts){
     if(!opts || !opts.on) return;
@@ -1101,9 +1137,9 @@ function renderDashboard(){
   }
   $('#tEvo').textContent = `Evolución de ${VL} en el tiempo`;
   $('#sEvo').textContent = `${foco}${$('#fEst').value?' · '+$('#fEst').value:''} · Sondas, SFR${V==='CE'?' y CE objetivo':''}${porSemana?' · agregado por semana':''}`;
-  dibujar('chEvo', { type:'line', data:{ labels:lab, datasets:ds }, options:{ responsive:true, maintainAspectRatio:false, animation:{duration:200},
-    interaction:{ mode:'index', intersect:false },
-    plugins:{ legend:{ labels:{ usePointStyle:true, boxWidth:8, boxHeight:8, filter:i=>i.text!=='_banda' } }, tooltip:{ filter:i=>!i.dataset.label.startsWith('_') && !i.dataset.label.startsWith('Rango') } },
+  dibujar('chEvo', { type:'line', data:{ labels:lab, datasets:ds }, plugins:[valoresLinea], options:{ responsive:true, maintainAspectRatio:false, animation:{duration:200},
+    interaction:{ mode:'index', intersect:false }, layout:{ padding:{ top:10 } },
+    plugins:{ valores:{ on:VER_VALORES }, legend:{ labels:{ usePointStyle:true, boxWidth:8, boxHeight:8, filter:i=>i.text!=='_banda' } }, tooltip:{ filter:i=>!i.dataset.label.startsWith('_') && !i.dataset.label.startsWith('Rango') } },
     scales:{ x:{ grid:{display:false}, ticks:{ maxRotation:45, autoSkip:true, maxTicksLimit:14 } }, y:{ beginAtZero:true } } } });
 
   /* Perfil por profundidad */
@@ -1175,6 +1211,84 @@ function renderTabla(filas){
     ${vis.map(r => `<tr><td>${fmtFecha(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td>${esc(r[3])}</td><td>${r[4]}</td><td class="n">${f2(r[5])}</td><td class="n">${r[6]}</td><td class="n">${r[7]}</td></tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--ink-faint);padding:20px">Sin registros para los filtros</td></tr>'}</tbody></table>`;
   $('#pgInfo').textContent = `Página ${PAG+1} de ${paginas}`;
   $('#pgAnt').disabled = PAG===0; $('#pgSig').disabled = PAG>=paginas-1;
+}
+
+
+/* =====================================================================
+   GENERAR HTML — copia estática del Dashboard con los filtros actuales
+   ===================================================================== */
+async function generarHTML(btn){
+  if(!DATA.cargado){ alert('Espera a que carguen los datos.'); return; }
+  const txt = btn.textContent; btn.disabled = true; btn.textContent = 'Generando…';
+  try{
+    await cargarChart().catch(()=>{});
+    renderDashboard();
+    await new Promise(r => setTimeout(r, 450));                 // deja terminar el dibujo de los gráficos
+    Object.values(charts).forEach(c => { try{ c.stop(); c.update('none'); }catch(e){} });
+
+    const orig = $('#v-dashboard');
+    const clon = orig.cloneNode(true);
+    clon.removeAttribute('id'); clon.classList.add('act');
+    // Gráficos → imágenes
+    const cvO = orig.querySelectorAll('canvas'), cvC = clon.querySelectorAll('canvas');
+    cvO.forEach((cv, i) => {
+      const img = document.createElement('img');
+      try{ img.src = cv.toDataURL('image/png'); }catch(e){}
+      img.alt = cv.getAttribute('aria-label') || 'Gráfico'; img.className = 'chart-img';
+      cvC[i].replaceWith(img);
+    });
+    clon.querySelectorAll('.chart-msg, .solo-app').forEach(e => e.remove());
+    clon.querySelectorAll('.panel-sub').forEach(e => { if(e.textContent.includes('Toca un encabezado')) e.textContent = 'Ordenado por desviación'; });
+    const demo = clon.querySelector('#demoBanner'); if(demo && orig.querySelector('#demoBanner').style.display==='none') demo.remove();
+
+    // Panel de filtros → resumen de filtros aplicados
+    const val = id => { const el = $('#'+id); return el.tagName==='SELECT' ? (el.value ? el.options[el.selectedIndex].text : '') : el.value; };
+    const filtros = [
+      ['Temporada', val('fTemp') || 'Todas'], ['Semana', val('fSem') || 'Todas'],
+      ['Fecha desde', $('#fDesde').value ? fmtFecha($('#fDesde').value) : '—'], ['Fecha hasta', $('#fHasta').value ? fmtFecha($('#fHasta').value) : '—'],
+      ['Sector equipo', val('fSector') || 'Todos'], ['Estación', val('fEst') || 'Todas'], ['Tipo de solución', val('fTipo') || 'Todos'],
+      ['Variable', VAR==='CE' ? 'CE' : 'pH'], ['Sector de detalle', $('#kpiSector').textContent.replace('Sector de detalle: ','')]
+    ];
+    const panelF = [...clon.querySelectorAll('.panel')].find(p => p.querySelector('.filtros'));
+    if(panelF) panelF.innerHTML = `<div class="panel-head"><div class="panel-title"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M6 12h12M10 18h4"/></svg></span><h2>Filtros aplicados</h2></div><div class="panel-sub">Vista del Dashboard al momento de generar este archivo</div></div>
+      <div class="chips-f">${filtros.map(([k,v]) => `<div class="fchip"><span>${k}</span><b>${esc(v)}</b></div>`).join('')}</div>`;
+
+    // Tabla: todos los registros filtrados (no solo la página visible)
+    const MAX = 5000, L = largo(filasBase(false));
+    const tb = clon.querySelector('#tablaBox');
+    if(tb){
+      tb.removeAttribute('id');
+      tb.innerHTML = `<table class="dt"><thead><tr><th>Fecha</th><th>Sector</th><th>Estación</th><th>Tipo</th><th>Variable</th><th class="n">Valor</th><th class="n">Semana</th><th class="n">Temporada</th></tr></thead><tbody>
+        ${L.slice(0, MAX).map(r => `<tr><td>${fmtFecha(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td>${esc(r[3])}</td><td>${r[4]}</td><td class="n">${f2(r[5])}</td><td class="n">${r[6]}</td><td class="n">${r[7]}</td></tr>`).join('')}</tbody></table>`;
+      if(L.length > MAX) tb.insertAdjacentHTML('afterend', `<div class="panel-sub" style="margin-top:8px">Se muestran los ${MAX.toLocaleString('es-PE')} registros más recientes de ${L.length.toLocaleString('es-PE')}. Usa filtros más acotados para incluirlos todos.</div>`);
+    }
+    clon.querySelectorAll('[id]').forEach(e => e.removeAttribute('id'));
+    clon.querySelectorAll('[onclick]').forEach(e => e.removeAttribute('onclick'));
+
+    // Encabezado
+    const hdr = document.querySelector('.hdr').cloneNode(true);
+    hdr.querySelectorAll('[id]').forEach(e => e.removeAttribute('id'));
+    hdr.querySelector('.hdr-meta').insertAdjacentHTML('beforeend', `<div><span>Generado</span><b>${ahoraLimaTxt()}</b></div>`);
+
+    const css = [...document.querySelectorAll('style')].map(s => s.textContent).join('\n');
+    const extra = `.view{display:block!important}.shell{padding-bottom:40px}.valve-chip{cursor:default}.valve-chip:hover{transform:none;box-shadow:none}
+      table.dt th{cursor:default}.chart-img{width:100%;height:100%;object-fit:contain;display:block}
+      .chips-f{display:flex;flex-wrap:wrap;gap:8px}.fchip{background:var(--bg-soft);border:1px solid var(--line);border-radius:10px;padding:7px 12px;font-size:12.5px}
+      .fchip span{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-faint);font-weight:700}.fchip b{color:var(--primary-dark)}
+      .table-scroll{max-height:520px}@media print{.table-scroll{max-height:none;overflow:visible}.panel{break-inside:avoid}}`;
+    const titulo = `Dashboard Fertirriego · ${filtros[0][1]}${$('#fSector').value ? ' · ' + $('#fSector').value : ''}`;
+    const html = `<!DOCTYPE html>\n<html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(titulo)}</title><style>${css}\n${extra}</style></head>
+<body><div class="shell wide">${hdr.outerHTML}${clon.outerHTML}</div></body></html>`;
+
+    const p = partesLima();
+    const nombre = `Dashboard_Fertirriego_${(filtros[0][1]||'Todas').replace(/\s+/g,'')}${$('#fSector').value ? '_' + $('#fSector').value : ''}_${p.year}${p.month}${p.day}_${p.hour}${p.minute}.html`;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([html], { type:'text/html;charset=utf-8' }));
+    a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  }catch(err){ alert('No se pudo generar el HTML: ' + err.message); }
+  finally{ btn.disabled = false; btn.textContent = txt; }
 }
 
 /* =====================================================================
