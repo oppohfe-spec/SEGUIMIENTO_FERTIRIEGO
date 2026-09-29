@@ -567,7 +567,7 @@ function validarInput(inp){
   if(inp.value.trim()==='') return;
   if(v==null || v<0){ inp.classList.add('bad'); return; }
   if(k.endsWith('PH')){ inp.classList.add(v<CONFIG.PH_RANGO[0]||v>CONFIG.PH_RANGO[1] ? 'bad' : 'okv'); return; }
-  if(k==='sfrCE'){ const sec = FORM[+inp.dataset.i].sector; const est = estadoDe(devSFR(sec, v, objDe(sec))); inp.classList.add(est==='CRITICO'?'bad':est==='ALERTA'?'warn':'okv'); return; }
+  if(k==='sfrCE'){ if(!FORM[+inp.dataset.i]) return; const sec = FORM[+inp.dataset.i].sector; const est = estadoDe(devSFR(sec, v, objDe(sec))); inp.classList.add(est==='CRITICO'?'bad':est==='ALERTA'?'warn':'okv'); return; }
   inp.classList.add('okv');
 }
 function copiarSFR(s){
@@ -741,8 +741,9 @@ async function enviar(){
   }[res.estado];
   terminarEdicion(false);
   if(DATA.raw) { procesarDatos(DATA.raw); prepararFiltros(); }
-  OBJ = {}; OBJ_TOCADO = {}; sugerirObjetivos();          // por defecto: el último objetivo usado
+  OBJ = {}; OBJ_TOCADO = {};
   if(eraEdicion) { FORM = ESTACIONES.slice(); renderFormulario(); }
+  sugerirObjetivos();                                      // por defecto: el último objetivo usado
   vaciarFormulario();
   if(eraEdicion) cargarBorrador(); else store.del(LS_DRAFT);
   actualizarPendientes();
@@ -797,7 +798,7 @@ function terminarEdicion(recargar){
   EDIT = null;
   $('#editBanner').classList.remove('show');
   $('#btnCancelar').textContent = 'Cancelar'; $('#btnRegistrar').textContent = 'Registrar'; $('#btnRegWa').textContent = 'Registrar y enviar WhatsApp';
-  if(recargar){ OBJ = {}; OBJ_TOCADO = {}; FORM = ESTACIONES.slice(); sugerirObjetivos(); renderFormulario(); vaciarFormulario(); cargarBorrador(); }
+  if(recargar){ OBJ = {}; OBJ_TOCADO = {}; FORM = ESTACIONES.slice(); renderFormulario(); sugerirObjetivos(); vaciarFormulario(); cargarBorrador(); window.scrollTo({top:0, behavior:'smooth'}); }
 }
 async function eliminarEnvio(e){
   if(!confirm(`¿Eliminar el registro ${e.codigo||''} del ${fmtFecha(e.fecha)} (${e.responsable})?\nSe borrarán sus ${e.filas.length} filas en Sheets. Esta acción no se puede deshacer.`)) return;
