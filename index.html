@@ -194,6 +194,7 @@ td.c-warn{background:var(--warning-soft);color:#8a5a15;font-weight:700}
 .pager button{background:var(--bg-soft);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-weight:600}
 .pager button:disabled{opacity:.4;cursor:not-allowed}
 .demo{background:var(--warning-soft);color:#7a5010;border:1px solid #efd7a5}
+body.reporte nav.tabs, body.reporte #barRegistro, body.reporte .solo-vivo, body.reporte #v-registro, body.reporte #v-historial{display:none!important}
 .foot{text-align:center;font-family:var(--mono);font-size:11px;color:var(--ink-faint);margin-top:24px}
 
 /* Historial */
@@ -279,8 +280,8 @@ td.c-warn{background:var(--warning-soft);color:#8a5a15;font-weight:700}
       <div class="chips" id="varChips"><button data-v="CE" class="act">CE</button><button data-v="PH">pH</button></div>
       <button class="btn-ghost btn-sm" onclick="limpiarFiltros()">Restablecer filtros</button>
       <span class="meta ml-auto" id="dataMeta"></span>
-      <button class="btn-sec btn-sm" onclick="cargarDatos(true)">Actualizar</button>
-      <button class="btn btn-sm" id="btnHtml" onclick="generarHTML(this)">⬇ Generar HTML</button>
+      <button class="btn-sec btn-sm solo-vivo" onclick="cargarDatos(true)">Actualizar</button>
+      <button class="btn btn-sm solo-vivo" id="btnHtml" onclick="generarHTML(this)">⬇ Generar HTML</button>
     </div>
   </section>
 
@@ -446,6 +447,7 @@ const store = {
   set(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); return true; }catch(e){ return false; } },
   del(k){ try{ localStorage.removeItem(k); }catch(e){} }
 };
+const REPORTE = window.__REPORTE__ || null;   // presente solo en un HTML descargado con "Generar HTML"
 let VER_VALORES = store.get('fert_ver_valores', !(window.matchMedia && matchMedia('(max-width:640px)').matches));   // valores sobre el gráfico de evolución
 const pad2 = n => String(n).padStart(2,'0');
 const ZONA = 'America/Lima';
@@ -862,7 +864,7 @@ function procesarDatos(rawServidor){
   const raw = clonarRaw(rawServidor);
   raw.envios.forEach(e => e[1] = normalizarFecha(e[1]));
   const pendIds = new Set();
-  store.get(LS_PEND, []).forEach(op => { aplicarOpRaw(raw, { accion:'guardar', ...op }); if(op.accion!=='eliminar') pendIds.add(op.id); });
+  if(!REPORTE) store.get(LS_PEND, []).forEach(op => { aplicarOpRaw(raw, { accion:'guardar', ...op }); if(op.accion!=='eliminar') pendIds.add(op.id); });
   const envios = raw.envios.map(e => ({ id:e[0], fecha:e[1], responsable:e[2], observaciones:e[3]||'', codigo:e[4]||'', filas:[], pend:pendIds.has(e[0]), ...infoFecha(e[1]||'2000-01-01') }));
   const filas = [];
   raw.registros.forEach(r => {
@@ -889,6 +891,7 @@ function aplicarRaw(raw, fuente, ts){
   if(tab==='historial') renderHistorial(); else if(tab==='dashboard') renderDashboard();
 }
 function cargarDatos(forzar){
+  if(REPORTE) return Promise.resolve();
   if(CARGANDO) return CARGANDO;
   CARGANDO = (async () => {
     if(esDemo()){ aplicarRaw((DATA.fuente==='demo' && DATA.raw) ? DATA.raw : datosDemo(), 'demo', new Date()); return; }
@@ -915,7 +918,7 @@ function cargarDatos(forzar){
   return CARGANDO;
 }
 function actualizarMeta(){
-  const fuenteTxt = { demo:'Datos de demostración', sheets:'Sheets', cache:'Sin conexión: datos guardados', error:'No se pudo cargar' }[DATA.fuente] || '';
+  const fuenteTxt = { demo:'Datos de demostración', sheets:'Sheets', cache:'Sin conexión: datos guardados', error:'No se pudo cargar', reporte:'Reporte descargado · datos al' }[DATA.fuente] || '';
   const cuando = DATA.actualizado ? DATA.actualizado.toLocaleString('es-PE',{ timeZone:ZONA, dateStyle:'short', timeStyle:'short' }) : '–';
   $('#dataMeta').textContent = `${fuenteTxt} · ${cuando}`;
   $('#mAct').textContent = cuando;
@@ -1215,80 +1218,70 @@ function renderTabla(filas){
 
 
 /* =====================================================================
-   GENERAR HTML — copia estática del Dashboard con los filtros actuales
+   GENERAR HTML — Dashboard interactivo descargable
+   Copia la app con los datos hasta la última actualización y los filtros actuales;
+   en el archivo los filtros siguen funcionando (sin conexión a Sheets).
    ===================================================================== */
 async function generarHTML(btn){
   if(!DATA.cargado){ alert('Espera a que carguen los datos.'); return; }
   const txt = btn.textContent; btn.disabled = true; btn.textContent = 'Generando…';
   try{
-    await cargarChart().catch(()=>{});
-    renderDashboard();
-    await new Promise(r => setTimeout(r, 450));                 // deja terminar el dibujo de los gráficos
-    Object.values(charts).forEach(c => { try{ c.stop(); c.update('none'); }catch(e){} });
-
-    const orig = $('#v-dashboard');
-    const clon = orig.cloneNode(true);
-    clon.removeAttribute('id'); clon.classList.add('act');
-    // Gráficos → imágenes
-    const cvO = orig.querySelectorAll('canvas'), cvC = clon.querySelectorAll('canvas');
-    cvO.forEach((cv, i) => {
-      const img = document.createElement('img');
-      try{ img.src = cv.toDataURL('image/png'); }catch(e){}
-      img.alt = cv.getAttribute('aria-label') || 'Gráfico'; img.className = 'chart-img';
-      cvC[i].replaceWith(img);
-    });
-    clon.querySelectorAll('.chart-msg, .solo-app').forEach(e => e.remove());
-    clon.querySelectorAll('.panel-sub').forEach(e => { if(e.textContent.includes('Toca un encabezado')) e.textContent = 'Ordenado por desviación'; });
-    const demo = clon.querySelector('#demoBanner'); if(demo && orig.querySelector('#demoBanner').style.display==='none') demo.remove();
-
-    // Panel de filtros → resumen de filtros aplicados
-    const val = id => { const el = $('#'+id); return el.tagName==='SELECT' ? (el.value ? el.options[el.selectedIndex].text : '') : el.value; };
-    const filtros = [
-      ['Temporada', val('fTemp') || 'Todas'], ['Semana', val('fSem') || 'Todas'],
-      ['Fecha desde', $('#fDesde').value ? fmtFecha($('#fDesde').value) : '—'], ['Fecha hasta', $('#fHasta').value ? fmtFecha($('#fHasta').value) : '—'],
-      ['Sector equipo', val('fSector') || 'Todos'], ['Estación', val('fEst') || 'Todas'], ['Tipo de solución', val('fTipo') || 'Todos'],
-      ['Variable', VAR==='CE' ? 'CE' : 'pH'], ['Sector de detalle', $('#kpiSector').textContent.replace('Sector de detalle: ','')]
-    ];
-    const panelF = [...clon.querySelectorAll('.panel')].find(p => p.querySelector('.filtros'));
-    if(panelF) panelF.innerHTML = `<div class="panel-head"><div class="panel-title"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M6 12h12M10 18h4"/></svg></span><h2>Filtros aplicados</h2></div><div class="panel-sub">Vista del Dashboard al momento de generar este archivo</div></div>
-      <div class="chips-f">${filtros.map(([k,v]) => `<div class="fchip"><span>${k}</span><b>${esc(v)}</b></div>`).join('')}</div>`;
-
-    // Tabla: todos los registros filtrados (no solo la página visible)
-    const MAX = 5000, L = largo(filasBase(false));
-    const tb = clon.querySelector('#tablaBox');
-    if(tb){
-      tb.removeAttribute('id');
-      tb.innerHTML = `<table class="dt"><thead><tr><th>Fecha</th><th>Sector</th><th>Estación</th><th>Tipo</th><th>Variable</th><th class="n">Valor</th><th class="n">Semana</th><th class="n">Temporada</th></tr></thead><tbody>
-        ${L.slice(0, MAX).map(r => `<tr><td>${fmtFecha(r[0])}</td><td>${esc(r[1])}</td><td>${esc(r[2])}</td><td>${esc(r[3])}</td><td>${r[4]}</td><td class="n">${f2(r[5])}</td><td class="n">${r[6]}</td><td class="n">${r[7]}</td></tr>`).join('')}</tbody></table>`;
-      if(L.length > MAX) tb.insertAdjacentHTML('afterend', `<div class="panel-sub" style="margin-top:8px">Se muestran los ${MAX.toLocaleString('es-PE')} registros más recientes de ${L.length.toLocaleString('es-PE')}. Usa filtros más acotados para incluirlos todos.</div>`);
+    // 1) Código de la app (versión publicada); si no se puede leer, se usa la página actual
+    let fuente = '';
+    try{ const r = await fetch(location.href.split('#')[0], { cache:'no-store' }); if(r.ok) fuente = await r.text(); }catch(e){}
+    if(!fuente || fuente.indexOf('generarHTML') < 0) fuente = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+    const TAG = '<scr' + 'ipt id="reporte-';
+    fuente = fuente.replace(new RegExp(TAG + '(data|chart)">[\\s\\S]*?<\\/scr' + 'ipt>\\n?', 'g'), '');
+    // 2) Librería de gráficos incluida, para que funcione sin internet
+    let chartJs = '';
+    for(const u of ['https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js','https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js']){
+      try{ const r = await fetch(u); if(r.ok){ chartJs = await r.text(); break; } }catch(e){}
     }
-    clon.querySelectorAll('[id]').forEach(e => e.removeAttribute('id'));
-    clon.querySelectorAll('[onclick]').forEach(e => e.removeAttribute('onclick'));
+    // 3) Datos (incluye registros aún no subidos) + filtros actuales
+    const raw = clonarRaw(DATA.raw || {envios:[],est:[],registros:[]});
+    store.get(LS_PEND, []).forEach(op => aplicarOpRaw(raw, { accion:'guardar', ...op }));
+    const rep = {
+      raw, param: PARAM, generado: ahoraLimaTxt(),
+      actualizado: (DATA.actualizado || new Date()).toISOString(),
+      filtros: { fTemp:$('#fTemp').value, fSem:$('#fSem').value, fDesde:$('#fDesde').value, fHasta:$('#fHasta').value,
+                 fSector:$('#fSector').value, fEst:$('#fEst').value, fTipo:$('#fTipo').value, VAR, FOCO, VER_VALORES }
+    };
+    const seguro = t => t.replace(/<\/(script)/gi, '<\\/$1');
+    const inyectar = TAG + 'data">window.__REPORTE__ = ' + seguro(JSON.stringify(rep)) + ';<\/script>\n' +
+                     (chartJs ? TAG + 'chart">' + seguro(chartJs) + '<\/script>\n' : '');
+    const i = fuente.search(/<\/head>/i);
+    const html = i >= 0 ? fuente.slice(0, i) + inyectar + fuente.slice(i) : inyectar + fuente;
 
-    // Encabezado
-    const hdr = document.querySelector('.hdr').cloneNode(true);
-    hdr.querySelectorAll('[id]').forEach(e => e.removeAttribute('id'));
-    hdr.querySelector('.hdr-meta').insertAdjacentHTML('beforeend', `<div><span>Generado</span><b>${ahoraLimaTxt()}</b></div>`);
-
-    const css = [...document.querySelectorAll('style')].map(s => s.textContent).join('\n');
-    const extra = `.view{display:block!important}.shell{padding-bottom:40px}.valve-chip{cursor:default}.valve-chip:hover{transform:none;box-shadow:none}
-      table.dt th{cursor:default}.chart-img{width:100%;height:100%;object-fit:contain;display:block}
-      .chips-f{display:flex;flex-wrap:wrap;gap:8px}.fchip{background:var(--bg-soft);border:1px solid var(--line);border-radius:10px;padding:7px 12px;font-size:12.5px}
-      .fchip span{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-faint);font-weight:700}.fchip b{color:var(--primary-dark)}
-      .table-scroll{max-height:520px}@media print{.table-scroll{max-height:none;overflow:visible}.panel{break-inside:avoid}}`;
-    const titulo = `Dashboard Fertirriego · ${filtros[0][1]}${$('#fSector').value ? ' · ' + $('#fSector').value : ''}`;
-    const html = `<!DOCTYPE html>\n<html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(titulo)}</title><style>${css}\n${extra}</style></head>
-<body><div class="shell wide">${hdr.outerHTML}${clon.outerHTML}</div></body></html>`;
-
-    const p = partesLima();
-    const nombre = `Dashboard_Fertirriego_${(filtros[0][1]||'Todas').replace(/\s+/g,'')}${$('#fSector').value ? '_' + $('#fSector').value : ''}_${p.year}${p.month}${p.day}_${p.hour}${p.minute}.html`;
+    const p = partesLima(), temp = $('#fTemp').value || 'Todas', sec = $('#fSector').value;
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([html], { type:'text/html;charset=utf-8' }));
-    a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
+    a.download = `Dashboard_Fertirriego_${temp}${sec ? '_' + sec : ''}_${p.year}${p.month}${p.day}_${p.hour}${p.minute}.html`;
+    document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 3000);
   }catch(err){ alert('No se pudo generar el HTML: ' + err.message); }
   finally{ btn.disabled = false; btn.textContent = txt; }
+}
+
+/* Modo reporte: cuando la página es un HTML descargado con "Generar HTML" */
+function iniciarReporte(){
+  const R = REPORTE, F = R.filtros || {};
+  document.body.classList.add('reporte');
+  PARAM = R.param || PARAM;
+  DATA.raw = R.raw; DATA.fuente = 'reporte'; DATA.actualizado = new Date(R.actualizado);
+  procesarDatos(R.raw); DATA.cargado = true; FILTRO_INI = true;
+  prepararFiltros();
+  const poner = (id, v) => { const el = $('#'+id); if(el && v!=null && (el.tagName!=='SELECT' || [...el.options].some(o=>o.value===v))) el.value = v; };
+  poner('fTemp', F.fTemp);
+  opciones($('#fSem'), semanasDe($('#fTemp').value), 'Todas');
+  ['fSem','fDesde','fHasta','fSector','fTipo'].forEach(id => poner(id, F[id]));
+  prepararEstaciones(); poner('fEst', F.fEst);
+  VAR = F.VAR || 'CE'; FOCO = F.FOCO || null; VER_VALORES = F.VER_VALORES !== false;
+  $$('#varChips button').forEach(x => x.classList.toggle('act', x.dataset.v===VAR));
+  marcarValChips();
+  $('#mAct').closest('.hdr-meta').insertAdjacentHTML('beforeend', `<div><span>Reporte generado</span><b>${esc(R.generado||'')}</b></div>`);
+  $('#v-dashboard').insertAdjacentHTML('afterbegin', `<div class="alert info" style="margin-top:14px">📄 Reporte descargado con datos hasta la última actualización (${esc(DATA.actualizado.toLocaleString('es-PE',{timeZone:ZONA,dateStyle:'short',timeStyle:'short'}))}). Los filtros funcionan; para ver registros nuevos, genera otro HTML desde la app.</div>`);
+  document.title = 'Dashboard Fertirriego · ' + (R.generado || '');
+  irA('dashboard');
 }
 
 /* =====================================================================
@@ -1478,13 +1471,16 @@ function datosDemo(){
 }
 
 /* Init */
+if(REPORTE){ iniciarReporte(); }
+else {
 renderFormulario();
 cargarBorrador();
 actualizarPendientes();
 reintentarPendientes(false);
 window.addEventListener('online', () => reintentarPendientes(false));
 setTimeout(() => { if(!DATA.cargado) cargarDatos(false); }, 1200);
-if('serviceWorker' in navigator && location.protocol === 'https:'){
+}
+if(!REPORTE && 'serviceWorker' in navigator && location.protocol === 'https:'){
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
 }
 </script>
