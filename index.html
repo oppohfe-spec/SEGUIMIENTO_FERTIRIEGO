@@ -265,7 +265,7 @@ body.reporte nav.tabs, body.reporte #barRegistro, body.reporte .solo-vivo, body.
   <section class="panel">
     <div class="panel-head">
       <div class="panel-title"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M6 12h12M10 18h4"/></svg></span><h2>Filtros</h2></div>
-      <div class="panel-sub">Los filtros afectan KPIs, gráficos, ranking y tabla</div>
+      <div class="panel-sub" id="filtroSub">Los filtros afectan KPIs, gráficos, ranking y tabla</div>
     </div>
     <div class="filtros">
       <div><label class="f" for="fTemp">Temporada</label><select id="fTemp"></select></div>
@@ -282,6 +282,7 @@ body.reporte nav.tabs, body.reporte #barRegistro, body.reporte .solo-vivo, body.
       <span class="meta ml-auto" id="dataMeta"></span>
       <button class="btn-sec btn-sm solo-vivo" onclick="cargarDatos(true)">Actualizar</button>
       <button class="btn btn-sm solo-vivo" id="btnHtml" onclick="generarHTML(this)">⬇ Generar HTML</button>
+      <button class="btn btn-sm" id="btnXlsx" onclick="exportarExcel(this)">⬇ Exportar Excel</button>
     </div>
   </section>
 
@@ -947,6 +948,30 @@ function cargarChart(){
    FILTROS
    ===================================================================== */
 let VAR = 'CE', FOCO = null, FILTRO_INI = false;
+let FILTRO_AUTO = true;   // true mientras el Dashboard esté en el periodo por defecto (últimas 4 semanas)
+const SEM_DEF = 4;
+function lunesISO(iso){ const d = new Date(iso+'T12:00:00Z'), w = d.getUTCDay() || 7; d.setUTCDate(d.getUTCDate() - w + 1); return d.toISOString().slice(0,10); }
+/* Últimas 4 semanas con datos (contando desde la semana más reciente registrada) */
+function periodoDefecto(){
+  const ks = [...new Set(DATA.filas.map(f=>f.key))].sort((a,b)=>b-a).slice(0, SEM_DEF);
+  if(!ks.length) return null;
+  const sel = DATA.filas.filter(f => ks.includes(f.key));
+  const desde = lunesISO(sel.filter(f=>f.key===ks[ks.length-1]).map(f=>f.fecha).sort()[0]);
+  const temps = [...new Set(sel.map(f=>f.temp))];
+  return { desde, temp: temps.length===1 ? temps[0] : '', ini: ks[ks.length-1], fin: ks[0] };
+}
+function aplicarPeriodoDefecto(){
+  const d = periodoDefecto(); if(!d) return false;
+  opciones($('#fTemp'), temporadas().map(x=>[x,x]), 'Todas');
+  $('#fTemp').value = d.temp; $('#fSem').value = ''; $('#fDesde').value = d.desde; $('#fHasta').value = '';
+  return true;
+}
+function notaPeriodo(){
+  const el = $('#filtroSub'); if(!el) return;
+  const d = FILTRO_AUTO && periodoDefecto();
+  el.textContent = d ? `Por defecto: últimas ${SEM_DEF} semanas con datos (S${pad2(d.ini%100)} a S${pad2(d.fin%100)}, desde ${fmtFecha(d.desde)})`
+                     : 'Los filtros afectan KPIs, gráficos, ranking y tabla';
+}
 function opciones(sel, items, todas){
   const prev = sel.value;
   sel.innerHTML = (todas!=null?`<option value="">${todas}</option>`:'') + items.map(([v,t])=>`<option value="${esc(v)}">${esc(t)}</option>`).join('');
@@ -966,6 +991,7 @@ function prepararFiltros(){
     const def = DATA.filas.some(f=>f.temp===actual) ? actual : (t[0] ? t[0][0] : '');
     $('#fTemp').value = def; $('#hTemp').value = def; FILTRO_INI = true;
   }
+  if(FILTRO_AUTO) FILTRO_AUTO = aplicarPeriodoDefecto();
   opciones($('#fSem'), semanasDe($('#fTemp').value), 'Todas');
   opciones($('#hSem'), semanasDe($('#hTemp').value), 'Todas');
   const secs = sectoresConDatos().map(s=>[s,s]);
@@ -978,6 +1004,7 @@ function prepararEstaciones(){
   opciones($('#fEst'), ests.map(e=>[e,e]), 'Todas');
 }
 ['fTemp','fSem','fDesde','fHasta','fSector','fEst','fTipo'].forEach(id => $('#'+id).addEventListener('change', () => {
+  if(['fTemp','fSem','fDesde','fHasta'].includes(id)) FILTRO_AUTO = false;
   if(id==='fTemp') opciones($('#fSem'), semanasDe($('#fTemp').value), 'Todas');
   if(id==='fSector'){ FOCO = $('#fSector').value || FOCO; prepararEstaciones(); }
   PAG = 0; renderDashboard();
@@ -991,7 +1018,7 @@ marcarValChips();
 $$('#valChips button').forEach(b => b.addEventListener('click', () => { VER_VALORES = b.dataset.v==='1'; store.set('fert_ver_valores', VER_VALORES); marcarValChips(); renderDashboard(); }));
 $$('#varChips button').forEach(b => b.addEventListener('click', () => { VAR = b.dataset.v; $$('#varChips button').forEach(x=>x.classList.toggle('act', x===b)); renderDashboard(); }));
 function limpiarFiltros(){
-  $('#fTemp').value = temporadas()[0] || ''; FILTRO_INI = false; ['fSem','fDesde','fHasta','fSector','fEst','fTipo'].forEach(id => $('#'+id).value='');
+  $('#fTemp').value = temporadas()[0] || ''; FILTRO_INI = false; FILTRO_AUTO = true; ['fSem','fDesde','fHasta','fSector','fEst','fTipo'].forEach(id => $('#'+id).value='');
   FOCO = null; prepararFiltros(); PAG = 0; renderDashboard();
 }
 /* Filas según filtros (opcionalmente ignorando el sector) */
@@ -1081,7 +1108,7 @@ const etiquetasBarras = {
 function renderDashboard(){
   if(!DATA.cargado) return;
   if(!window.Chart) cargarChart().then(() => { if($('#v-dashboard').classList.contains('act')) renderDashboard(); }).catch(()=>{});
-  actualizarMeta();
+  actualizarMeta(); notaPeriodo();
   const V = VAR, VL = V==='CE' ? 'CE' : 'pH';
   const base = filasBase(true), filas = filasBase(false);
   const foco = sectorFoco(filas.length ? filas : base);
@@ -1218,6 +1245,142 @@ function renderTabla(filas){
 
 
 /* =====================================================================
+   EXPORTAR EXCEL — datos del Dashboard con los filtros actuales
+   ===================================================================== */
+let XLSX_CARGA = null;
+function cargarXlsx(){
+  if(window.XLSX) return Promise.resolve();
+  if(!XLSX_CARGA) XLSX_CARGA = cargarLibs([['https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js',
+                                            'https://unpkg.com/xlsx-js-style@1.2.0/dist/xlsx.bundle.js',
+                                            'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js']])
+    .catch(e => { XLSX_CARGA = null; throw e; });
+  return XLSX_CARGA;
+}
+function descripcionFiltros(){
+  const t = id => { const el = $('#'+id); return el.tagName==='SELECT' ? (el.selectedOptions[0] ? el.selectedOptions[0].text : '') : (el.value ? fmtFecha(el.value) : ''); };
+  return [
+    ['Temporada', t('fTemp') || 'Todas'], ['Semana', t('fSem') || 'Todas'],
+    ['Fecha desde', t('fDesde') || '—'], ['Fecha hasta', t('fHasta') || '—'],
+    ['Sector', t('fSector') || 'Todos'], ['Estación', t('fEst') || 'Todas'], ['Tipo de solución', t('fTipo') || 'Todos'],
+  ].concat(FILTRO_AUTO ? [['Periodo', `Últimas ${SEM_DEF} semanas con datos (por defecto)`]] : []);
+}
+async function exportarExcel(btn){
+  if(!DATA.cargado){ alert('Aún no hay datos cargados.'); return; }
+  const txt = btn.textContent; btn.disabled = true; btn.textContent = 'Generando…';
+  try{
+    await cargarXlsx();
+    const X = window.XLSX, fx = iso => { const [y,m,d] = iso.split('-').map(Number); return (Date.UTC(y, m-1, d) - Date.UTC(1899, 11, 30)) / 864e5; }, r2 = v => v==null || isNaN(v) ? null : Math.round(v*100)/100;
+    const base = filasBase(true), filas = filasBase(false);
+    if(!filas.length){ alert('No hay registros para los filtros seleccionados.'); return; }
+    const codigo = new Map(DATA.envios.map(e => [e.id, e.codigo || '']));
+    const sfr = usarSFR(), son = usarSonda();
+    const VAR0 = VAR;
+    const resCE = (VAR='CE', sectoresConDatos().map(s => resumenSector(s, base)).filter(r => r.n || base.some(f=>f.sector===r.sector)));
+    const resPH = (VAR='PH', resCE.map(r => resumenSector(r.sector, base)));
+    VAR = VAR0;
+    const filtrados = $('#fSector').value ? resCE.filter(r => r.sector===$('#fSector').value) : resCE;
+
+    /* estilos (se aplican con xlsx-js-style; con SheetJS básico se ignoran) */
+    const VERDE = '0F6B4C', borde = { style:'thin', color:{ rgb:'D5DED8' } };
+    const sTit = { font:{ bold:true, sz:14, color:{ rgb:VERDE } } };
+    const sSub = { font:{ italic:true, color:{ rgb:'5B6B60' } } };
+    const sHead = { font:{ bold:true, color:{ rgb:'FFFFFF' } }, fill:{ fgColor:{ rgb:VERDE } }, alignment:{ horizontal:'center', vertical:'center', wrapText:true },
+                    border:{ top:borde, bottom:borde, left:borde, right:borde } };
+    const sCel = { border:{ top:borde, bottom:borde, left:borde, right:borde } };
+    const sEst = { NORMAL:{ fill:{ fgColor:{ rgb:'DFF3E7' } }, font:{ bold:true, color:{ rgb:'1E8E5A' } } },
+                   ALERTA:{ fill:{ fgColor:{ rgb:'FBEFD9' } }, font:{ bold:true, color:{ rgb:'B9741A' } } },
+                   CRITICO:{ fill:{ fgColor:{ rgb:'F8DEDA' } }, font:{ bold:true, color:{ rgb:'C0392B' } } } };
+
+    /* Construye una hoja: titulo + encabezado + filas; formatos por columna */
+    function hoja(titulo, sub, head, rows, opt = {}){
+      const pre = [[titulo], [sub], []].concat(opt.antes || []), r0 = pre.length;
+      const ws = X.utils.aoa_to_sheet(pre.concat([head], rows));
+      const fmt = opt.fmt || {};
+      const celda = (r,c) => ws[X.utils.encode_cell({ r, c })];
+      if(celda(0,0)) celda(0,0).s = sTit;
+      if(celda(1,0)) celda(1,0).s = sSub;
+      (opt.antes || []).forEach((_, i) => { const c = celda(3+i, 0); if(c) c.s = { font:{ bold:true } }; });
+      head.forEach((_, c) => { const x = celda(r0, c); if(x) x.s = sHead; });
+      rows.forEach((row, i) => row.forEach((v, c) => {
+        const x = celda(r0+1+i, c); if(!x) return;
+        x.s = Object.assign({}, sCel, (opt.estadoCol===c && sEst[v]) || {});
+        if(fmt[c] && typeof v === 'number') x.z = fmt[c];
+      }));
+      ws['!cols'] = head.map((h, c) => ({ wch: opt.anchos && opt.anchos[c] || Math.max(10, String(h).length + 2) }));
+      ws['!rows'] = []; ws['!rows'][r0] = { hpt: 30 };
+      ws['!autofilter'] = { ref: X.utils.encode_range({ s:{ r:r0, c:0 }, e:{ r:r0 + rows.length, c:head.length-1 } }) };
+      return ws;
+    }
+    const sub = `Generado ${ahoraLimaTxt()} · datos actualizados ${DATA.actualizado ? DATA.actualizado.toLocaleString('es-PE',{timeZone:ZONA,dateStyle:'short',timeStyle:'short'}) : '—'}`;
+    const wb = X.utils.book_new();
+
+    /* 1) Resumen por sector */
+    const hR = ['Sector'];
+    if(sfr) hR.push('CE objetivo', 'CE SFR', 'Desviación', 'Estado');
+    if(son) hR.push('CE prom. sondas', ...PROFS.map(p=>`CE ${p} cm`), 'Δ CE 15–40 cm');
+    if(sfr) hR.push('pH SFR');
+    if(son) hR.push('pH prom. sondas', ...PROFS.map(p=>`pH ${p} cm`));
+    hR.push('N.º valores');
+    const rowsR = filtrados.map((r, i) => {
+      const ph = resPH.find(x => x.sector===r.sector) || {}, row = [r.sector];
+      if(sfr) row.push(r2(r.obj), r2(r.sfr), r.dev==null ? null : r.dev/100, r.estado || 'N/D');
+      if(son) row.push(r2(r.son), ...PROFS.map(p => r2(r.dp[p])), r2(r.gap));
+      if(sfr) row.push(r2(ph.sfr));
+      if(son) row.push(r2(ph.son), ...PROFS.map(p => r2(ph.dp && ph.dp[p])));
+      row.push(r.n + (ph.n || 0));
+      return row;
+    });
+    const fmtR = {}; hR.forEach((h, c) => { if(c>0) fmtR[c] = h==='Desviación' ? '+0.0%;-0.0%;0.0%' : h==='N.º valores' ? '#,##0' : '0.00'; });
+    const antes = descripcionFiltros().map(([k, v]) => [k, v]).concat([[]]);
+    X.utils.book_append_sheet(wb, hoja('Seguimiento de Fertirriego · Resumen por sector', sub, hR, rowsR,
+      { fmt: fmtR, estadoCol: hR.indexOf('Estado'), antes, anchos: { 0: 18 } }), 'Resumen');
+
+    /* 2) Alertas (CE) */
+    const al = alertasDeResumen(filtrados);
+    X.utils.book_append_sheet(wb, hoja('Alertas (CE)', `Umbrales: ≤${PARAM.normalMax}% normal · ≤${PARAM.alertaMax}% alerta · Δ profundidad ≥ ${PARAM.gapProfundidad}`,
+      ['Nivel', 'Detalle'], al.length ? al.map(a => [a.nivel, a.t]) : [['—', 'Sin alertas activas para los filtros seleccionados']],
+      { estadoCol: 0, anchos: { 0: 12, 1: 95 } }), 'Alertas');
+
+    /* 3) Evolución: promedio por fecha y sector */
+    const grupos = new Map();
+    filas.forEach(f => { const k = f.fecha + '|' + f.sector; if(!grupos.has(k)) grupos.set(k, []); grupos.get(k).push(f); });
+    const hE = ['Fecha', 'Semana', 'Temporada', 'Sector'];
+    if(sfr) hE.push('CE objetivo', 'CE SFR', 'Desviación', 'Estado');
+    if(son) hE.push(...PROFS.map(p=>`CE ${p} cm`));
+    if(sfr) hE.push('pH SFR');
+    if(son) hE.push(...PROFS.map(p=>`pH ${p} cm`));
+    const rowsE = [...grupos.values()].sort((a, b) => b[0].fecha.localeCompare(a[0].fecha) || a[0].sector.localeCompare(b[0].sector)).map(g => {
+      const f0 = g[0], ceS = prom(g.map(f=>f.sfrCE)), conS = g.filter(f=>f.sfrCE!=null);
+      const obj = prom((conS.length ? conS : g).map(f => f.obj ?? PARAM.objetivos[f0.sector] ?? null));
+      const dev = (ceS!=null && obj) ? (ceS-obj)/obj*100 : null;
+      const row = [fx(f0.fecha), f0.sem, f0.temp, f0.sector];
+      if(sfr) row.push(r2(obj), r2(ceS), dev==null ? null : dev/100, estadoDe(dev) || 'N/D');
+      if(son) row.push(...PROFS.map(p => r2(prom(g.map(f=>f[`s${p}CE`])))));
+      if(sfr) row.push(r2(prom(g.map(f=>f.sfrPH))));
+      if(son) row.push(...PROFS.map(p => r2(prom(g.map(f=>f[`s${p}PH`])))));
+      return row;
+    });
+    const fmtE = { 0:'dd/mm/yyyy' }; hE.forEach((h, c) => { if(c>=4) fmtE[c] = h==='Desviación' ? '+0.0%;-0.0%;0.0%' : '0.00'; });
+    X.utils.book_append_sheet(wb, hoja('Evolución por fecha y sector', 'Promedio de las estaciones del sector en cada fecha', hE, rowsE,
+      { fmt: fmtE, estadoCol: hE.indexOf('Estado'), anchos: { 0: 12, 3: 10 } }), 'Evolución');
+
+    /* 4) Registros por estación */
+    const cols = KEYS.filter(k => k.startsWith('sfr') ? sfr : son);
+    const nom = k => k.startsWith('sfr') ? `SFR ${k.endsWith('CE')?'CE':'pH'}` : `S${k.slice(1, 3)} ${k.endsWith('CE')?'CE':'pH'}`;
+    const hG = ['Código', 'Fecha', 'Semana', 'Temporada', 'Sector', 'Estación', 'CE objetivo', ...cols.map(nom)];
+    const rowsG = [...filas].sort((a, b) => b.fecha.localeCompare(a.fecha) || a.sector.localeCompare(b.sector) || a.estacion.localeCompare(b.estacion))
+      .map(f => [codigo.get(f.id) || '', fx(f.fecha), f.sem, f.temp, f.sector, f.estacion, r2(f.obj ?? PARAM.objetivos[f.sector] ?? null), ...cols.map(k => r2(f[k]))]);
+    const fmtG = { 1:'dd/mm/yyyy' }; hG.forEach((h, c) => { if(c>=6) fmtG[c] = '0.00'; });
+    X.utils.book_append_sheet(wb, hoja('Registros por estación', `${rowsG.length.toLocaleString('es-PE')} filas · una fila por estación y fecha`, hG, rowsG,
+      { fmt: fmtG, anchos: { 0: 17, 1: 12, 5: 22 } }), 'Registros');
+
+    const p = partesLima(), temp = $('#fTemp').value || 'Todas', sec = $('#fSector').value;
+    X.writeFile(wb, `Dashboard_Fertirriego_${temp}${sec ? '_' + sec : ''}_${p.year}${p.month}${p.day}_${p.hour}${p.minute}.xlsx`, { compression: true });
+  }catch(err){ alert(err.message || 'No se pudo generar el Excel.'); }
+  finally{ btn.disabled = false; btn.textContent = txt; }
+}
+
+/* =====================================================================
    GENERAR HTML — Dashboard interactivo descargable
    Copia la app con los datos hasta la última actualización y los filtros actuales;
    en el archivo los filtros siguen funcionando (sin conexión a Sheets).
@@ -1244,7 +1407,7 @@ async function generarHTML(btn){
       raw, param: PARAM, generado: ahoraLimaTxt(),
       actualizado: (DATA.actualizado || new Date()).toISOString(),
       filtros: { fTemp:$('#fTemp').value, fSem:$('#fSem').value, fDesde:$('#fDesde').value, fHasta:$('#fHasta').value,
-                 fSector:$('#fSector').value, fEst:$('#fEst').value, fTipo:$('#fTipo').value, VAR, FOCO, VER_VALORES }
+                 fSector:$('#fSector').value, fEst:$('#fEst').value, fTipo:$('#fTipo').value, VAR, FOCO, VER_VALORES, FILTRO_AUTO }
     };
     const seguro = t => t.replace(/<\/(script)/gi, '<\\/$1');
     const inyectar = TAG + 'data">window.__REPORTE__ = ' + seguro(JSON.stringify(rep)) + ';<\/script>\n' +
@@ -1268,7 +1431,7 @@ function iniciarReporte(){
   document.body.classList.add('reporte');
   PARAM = R.param || PARAM;
   DATA.raw = R.raw; DATA.fuente = 'reporte'; DATA.actualizado = new Date(R.actualizado);
-  procesarDatos(R.raw); DATA.cargado = true; FILTRO_INI = true;
+  procesarDatos(R.raw); DATA.cargado = true; FILTRO_INI = true; FILTRO_AUTO = !!F.FILTRO_AUTO;
   prepararFiltros();
   const poner = (id, v) => { const el = $('#'+id); if(el && v!=null && (el.tagName!=='SELECT' || [...el.options].some(o=>o.value===v))) el.value = v; };
   poner('fTemp', F.fTemp);
